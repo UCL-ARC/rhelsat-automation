@@ -1,0 +1,5 @@
+[satellite]
+url = https://<address-of-satellite-server>
+org = <your-satellite-organization>
+username = <your-satellite-username>
+password = <your-personal-access-token>
