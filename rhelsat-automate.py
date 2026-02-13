@@ -16,12 +16,80 @@ from typing import Union
 
 
 @dataclass
-class SatelliteConfig:
+class KatelloServer:
     url: str
     org: str
     username: str
     password: str
     org_id: Union(int,None) = None
+
+    def get(self, endpoint):
+        cred = (self.username, self.password)
+        url = f"{self.url}/katello/api{endpoint}"
+        resp = requests.get(url, auth=cred)
+        resp.raise_for_status()
+        return resp.json()
+
+    def post(self, endpoint, payload):
+        cred = (self.username, self.password)
+        url = f"{self.url}/katello/api{endpoint}"
+        resp = requests.post(url, auth=cred, json=payload)
+        resp.raise_for_status()
+        return resp.json()
+
+    def set_org_id(self):
+        response = self.get(f'/organizations?search={self.org}')
+        for result in response['results']:
+            if result['label'] == self.org:
+                self.org_id = result['id']
+                return True
+        return False
+
+    def get_content_view(self, cv_label):
+        response = self.get(f'/organizations/{self.org_id}/content_views?search={cv_label}')
+        for result in response['results']:
+            if result['label'] == cv_label:
+                return result
+        return None
+
+    def get_cv_repos(self, cv, nthread=10):
+        def get_repo(rid):
+            repo = self.get(f'/repositories/{rid}')
+            return repo
+        repo_ids = cv['repository_ids']
+        repos = []
+        with confut.ThreadPoolExecutor(max_workers=nthread) as exc:
+            futures = [ exc.submit(get_repo, rid) for rid in repo_ids ]
+            for fut in confut.as_completed(futures):
+                repos.append(fut.result())
+        return repos
+
+    def wait_for_cvv(self, cvv_id, poll_interval=20, max_unexpected=3):
+        nunexpected = 0
+        while True:
+            response = self.get(f'/content_view_versions/{cvv_id}')
+            last_event = response['last_event']
+            action = last_event['action']
+            if action != 'publish':
+                logging.error(f'last event action is "{action}", expected "publish"')
+                sys.exit(2)
+            status = last_event['status']
+            if status == 'successful':
+                logging.info(f'publish completed')
+                break
+            elif status == 'in progress':
+                progress = last_event['task']['progress']
+                logging.info(f'publish progress {100*progress}%')
+                sleep(poll_interval)
+            else:
+                nunexpected += 1
+                if nunexpected <= max_unexpected:
+                    logging.warning(f'unexpected status "{status}", will retry')
+                    sleep(poll_interval)
+                else:
+                    logging.error(f'unexpected status "{status}" persists, giving up')
+                    sys.exit(2)
+        return
 
 
 def process_args():
@@ -102,58 +170,12 @@ def day_of_year(dt):
     return doy
 
 
-def katello_get(endpoint, cfg):
-    cred = (cfg.username, cfg.password)
-    url = f"{cfg.url}/katello/api{endpoint}"
-    resp = requests.get(url, auth=cred)
-    resp.raise_for_status()
-    return resp.json()
-
-
-def katello_post(endpoint, payload, cfg):
-    cred = (cfg.username, cfg.password)
-    url = f"{cfg.url}/katello/api{endpoint}"
-    resp = requests.post(url, auth=cred, json=payload)
-    resp.raise_for_status()
-    return resp.json()
-
-
-def get_org_id(org, cfg):
-    response = katello_get('/organizations', cfg)
-    for result in response['results']:
-        if result['label'] == org:
-            org_id = result['id']
-            return org_id
-    return None
-
-
-def get_content_view(cv_label, cfg):
-    response = katello_get(f'/organizations/{cfg.org_id}/content_views?search={cv_label}', cfg)
-    for result in response['results']:
-        if result['label'] == cv_label:
-            return result
-    return None
-
-
-def get_cv_repos(cv, cfg, nthread=10):
-    def get_repo(rid):
-        repo = katello_get(f'/repositories/{rid}', cfg)
-        return repo
-    repo_ids = cv['repository_ids']
-    repos = []
-    with confut.ThreadPoolExecutor(max_workers=nthread) as exc:
-        futures = [ exc.submit(get_repo, rid) for rid in repo_ids ]
-        for fut in confut.as_completed(futures):
-            repos.append(fut.result())
-    return repos
-
-
-def run_promote(le_label, cfg, args):
+def run_promote(le_label, ks, args):
     pass
 
 
-def run_publish(cv_label, cfg, args):
-    cv = get_content_view(cv_label, cfg)
+def run_publish(cv_label, ks, args):
+    cv = ks.get_content_view(cv_label)
     if not cv:
         logging.error(f'cannot find content view "{cv_label}"')
         sys.exit(8)
@@ -165,7 +187,7 @@ def run_publish(cv_label, cfg, args):
 
     nrepo = len(cv["repository_ids"])
     logging.info(f'fetching data for {nrepo} repositories...')
-    repos = get_cv_repos(cv, cfg, nthread=args.threads)
+    repos = ks.get_cv_repos(cv, nthread=args.threads)
     nnosyncplan = 0
     nsyncsuccess = 0
     dt_latest_sync = None
@@ -212,64 +234,33 @@ def run_publish(cv_label, cfg, args):
         'minor': minor,
         }
     logging.info(f'publishing content view version {major}.{minor}...')
-    response = katello_post(f'/content_views/{cv_id}/publish', payload, cfg)
+    response = ks.post(f'/content_views/{cv_id}/publish', payload)
     return response
-
-
-def wait_for_cvv(cvv_id, cfg, poll_interval=20, max_unexpected=3):
-    nunexpected = 0
-    while True:
-        response = katello_get(f'/content_view_versions/{cvv_id}', cfg)
-        last_event = response['last_event']
-        action = last_event['action']
-        if action != 'publish':
-            logging.error(f'last event action is "{action}", expected "publish"')
-            sys.exit(2)
-        status = last_event['status']
-        if status == 'successful':
-            logging.info(f'publish completed')
-            break
-        elif status == 'in progress':
-            progress = last_event['task']['progress']
-            logging.info(f'publish progress {100*progress}%')
-            sleep(poll_interval)
-        else:
-            nunexpected += 1
-            if nunexpected <= max_unexpected:
-                logging.warning(f'unexpected status "{status}", will retry')
-                sleep(poll_interval)
-            else:
-                logging.error(f'unexpected status "{status}" persists, giving up')
-                sys.exit(2)
-    return
 
 
 if __name__ == '__main__':
     args = process_args()
     init_logger(args.log_level)
     cfg = load_config(args.config)
-    sat_cfg = SatelliteConfig(**cfg['satellite'])
+    ks  = KatelloServer(**cfg['satellite'])
 
-    org = sat_cfg.org
-    org_id = get_org_id(org, sat_cfg)
-    if not org_id:
-        logging.error(f'cannot find organizaion "{org}"')
+    if not ks.set_org_id():
+        logging.error(f'cannot find organizaion "{ks.org}"')
         sys.exit(8)
-    logging.info(f'found organization "{org}" with id {org_id}')
-    sat_cfg.org_id = org_id
+    logging.info(f'found organization "{ks.org}" with id {ks.org_id}')
 
     response = None
     if args.command == 'publish':
         cv_label = args.content_view
-        response = run_publish(cv_label, sat_cfg, args)
+        response = run_publish(cv_label, ks, args)
         if response:
             cvv_id = response['input']['content_view_version_id']
             logging.info(f'new content view version id = {cvv_id}')
             if args.wait:
-                wait_for_cvv(cvv_id, sat_cfg)
+                ks.wait_for_cvv(cvv_id)
     elif args.command == 'promote':
         le_label = args.environment
-        response = run_promote(le_label, sat_cfg, args)
+        response = run_promote(le_label, ks, args)
 
     logging.info('all operations complete')
 
