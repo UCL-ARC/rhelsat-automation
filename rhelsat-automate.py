@@ -52,6 +52,13 @@ class KatelloServer:
                 return result
         return None
 
+    def get_lifecycle_environment(self, le_label):
+        response = self.get(f'/organizations/{self.org_id}/environments?search={le_label}')
+        for result in response['results']:
+            if result['label'] == le_label:
+                return result
+        return None
+
     def get_cv_repos(self, cv, nthread=10):
         def get_repo(rid):
             repo = self.get(f'/repositories/{rid}')
@@ -171,7 +178,18 @@ def day_of_year(dt):
 
 
 def run_promote(le_label, ks, args):
-    pass
+    le = ks.get_lifecycle_environment(le_label)
+    if not le:
+        logging.error(f'cannot find lifecycle environment "{le_label}"')
+        sys.exit(8)
+    le_id = le['id']
+    logging.info(f'found lifecycle environment "{le_label}" with id {le_id}')
+    return le
+    #cvv_id = TODO
+    #payload = {
+    #    'environment_ids': [le_id],
+    #    }
+    #response = ks.post(f'/content_view_versions/{cvv_id}/promote', payload)
 
 
 def run_publish(cv_label, ks, args):
