@@ -9,6 +9,7 @@ import json
 import requests
 import dateutil
 import concurrent.futures as confut
+from time import sleep
 from datetime import datetime
 from dataclasses import dataclass
 from typing import Union
@@ -38,6 +39,10 @@ def process_args():
         '-f', '--force',
         action='store_true',
         help='force the operation')
+    parser.add_argument(
+        '-w', '--wait',
+        action='store_true',
+        help='wait until the action is completed')
     parser.add_argument(
         '--log-level',
         default='INFO',
@@ -144,55 +149,6 @@ def get_cv_repos(cv, cfg, nthread=10):
 
 
 def run_promote(le_label, cfg, args):
-    # while publish still in progress:
-    # - on the cv:
-    #   "last_task": {
-    #     "id": "e913335d-ea14-4693-a067-97b06d9160e2",
-    #     "started_at": "2026-02-12 17:28:31 UTC",
-    #     "result": "pending",
-    #     "last_sync_words": "1 minute"
-    #     ...
-    #   },
-    # - on the cv_version:
-    #   "last_event": {
-    #     "status": "in progress",
-    #     "action": "publish",
-    #     "task": {
-    #       "id": "e913335d-ea14-4693-a067-97b06d9160e2",
-    #       "label": "Actions::Katello::ContentView::Publish",
-    #       "pending": true,
-    #       "ended_at": null,
-    #       "state": "running",
-    #       "result": "pending",
-    #       "progress": 0.59,
-    #       ...},
-    #   },
-    #   "active_history": [
-    #     {
-    #       "user": "sa-arc-api",
-    #       "status": "in progress",
-    #       "description": null,
-    #       "action": "publish",
-    #       ...
-    #     }
-    #   ]
-    #
-    # when publish finished:
-    # - on the cv_version:
-    #   "last_event": {
-    #     "status": "successful",
-    #     "action": "publish",
-    #     "task": {
-    #       "id": "e913335d-ea14-4693-a067-97b06d9160e2",
-    #       "label": "Actions::Katello::ContentView::Publish",
-    #       "pending": false,
-    #       "ended_at": "2026-02-12 17:32:43 UTC",
-    #       "state": "stopped",
-    #       "result": "success",
-    #       "progress": 1.0,
-    #       ...},
-    #   },
-    #   "active_history": []
     pass
 
 
@@ -260,6 +216,34 @@ def run_publish(cv_label, cfg, args):
     return response
 
 
+def wait_for_cvv(cvv_id, cfg, poll_interval=20, max_unexpected=3):
+    nunexpected = 0
+    while True:
+        response = katello_get(f'/content_view_versions/{cvv_id}', cfg)
+        last_event = response['last_event']
+        action = last_event['action']
+        if action != 'publish':
+            logging.error(f'last event action is "{action}", expected "publish"')
+            sys.exit(2)
+        status = last_event['status']
+        if status == 'successful':
+            logging.info(f'publish completed')
+            break
+        elif status == 'in progress':
+            progress = last_event['task']['progress']
+            logging.info(f'publish progress {100*progress}%')
+            sleep(poll_interval)
+        else:
+            nunexpected += 1
+            if nunexpected <= max_unexpected:
+                logging.warning(f'unexpected status "{status}", will retry')
+                sleep(poll_interval)
+            else:
+                logging.error(f'unexpected status "{status}" persists, giving up')
+                sys.exit(2)
+    return
+
+
 if __name__ == '__main__':
     args = process_args()
     init_logger(args.log_level)
@@ -278,6 +262,11 @@ if __name__ == '__main__':
     if args.command == 'publish':
         cv_label = args.content_view
         response = run_publish(cv_label, sat_cfg, args)
+        if response:
+            cvv_id = response['input']['content_view_version_id']
+            logging.info(f'new content view version id = {cvv_id}')
+            if args.wait:
+                wait_for_cvv(cvv_id, sat_cfg)
     elif args.command == 'promote':
         le_label = args.environment
         response = run_promote(le_label, sat_cfg, args)
