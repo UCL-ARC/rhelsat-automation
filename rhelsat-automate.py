@@ -15,6 +15,57 @@ from dataclasses import dataclass
 from typing import Union
 
 
+def process_args():
+    parser = argparse.ArgumentParser(
+        description='Automate operations in RedHat Satellite.')
+    parser.add_argument(
+        '-c', '--config',
+        default='config.ini',
+        help='path to config file (INI format)')
+    parser.add_argument(
+        '-t', '--threads',
+        type=int, default=10,
+        help='number of concurrent requests')
+    parser.add_argument(
+        '-f', '--force',
+        action='store_true',
+        help='force the operation')
+    parser.add_argument(
+        '-w', '--wait',
+        action='store_true',
+        help='wait until the action is completed')
+    parser.add_argument(
+        '--log-level',
+        default='INFO',
+        help='logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)')
+
+    subparsers = parser.add_subparsers(
+        title='commands',
+        dest='command',
+        metavar='{publish,promote}',
+        required=True)
+    p_publish = subparsers.add_parser(
+        'publish',
+        help='publish a content view',
+        description='Publish a Content View.')
+    p_publish.add_argument(
+        'content_view',
+        help='label of the content view')
+    p_publish.add_argument(
+        '-v', '--version',
+        dest='cv_version', default=None,
+        help='override new content view version number (major.minor)')
+    p_promote = subparsers.add_parser(
+        'promote',
+        help='promote a content view to a lifecycle environment',
+        description='Promote a content view to a lifecycle environment.')
+    p_promote.add_argument(
+        'environment',
+        help='label of the lifecycle environment')
+    args = parser.parse_args()
+    return args
+
+
 @dataclass
 class KatelloServer:
     url: str
@@ -97,53 +148,6 @@ class KatelloServer:
                     logging.error(f'unexpected status "{status}" persists, giving up')
                     sys.exit(2)
         return
-
-
-def process_args():
-    parser = argparse.ArgumentParser(
-        description='Automate operations in RedHat Satellite.')
-    parser.add_argument(
-        '-c', '--config',
-        default='config.ini',
-        help='path to config file (INI format)')
-    parser.add_argument(
-        '-t', '--threads',
-        type=int, default=10,
-        help='number of concurrent requests')
-    parser.add_argument(
-        '-f', '--force',
-        action='store_true',
-        help='force the operation')
-    parser.add_argument(
-        '-w', '--wait',
-        action='store_true',
-        help='wait until the action is completed')
-    parser.add_argument(
-        '--log-level',
-        default='INFO',
-        help='logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)')
-
-    subparsers = parser.add_subparsers(
-        title='commands',
-        dest='command',
-        metavar='{publish,promote}',
-        required=True)
-    p_publish = subparsers.add_parser(
-        'publish',
-        help='publish a content view',
-        description='Publish a Content View.')
-    p_publish.add_argument(
-        'content_view',
-        help='label of the content view')
-    p_promote = subparsers.add_parser(
-        'promote',
-        help='promote a content view to a lifecycle environment',
-        description='Promote a content view to a lifecycle environment.')
-    p_promote.add_argument(
-        'environment',
-        help='label of the lifecycle environment')
-    args = parser.parse_args()
-    return args
 
 
 def init_logger(level='INFO'):
@@ -243,9 +247,12 @@ def run_publish(cv_label, ks, args):
         if not args.force:
             return None
     
-    now = datetime.now()
-    major = now.year
-    minor = day_of_year(now)
+    if args.cv_version:
+        major, minor = map(int, args.cv_version.split('.'))
+    else:
+        now = datetime.now()
+        major = now.year
+        minor = day_of_year(now)
     payload = {
         'description': 'auto-publish',
         'major': major,
