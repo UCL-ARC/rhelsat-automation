@@ -62,6 +62,10 @@ def process_args():
     p_promote.add_argument(
         'environment',
         help='label of the lifecycle environment')
+    p_promote.add_argument(
+        '-v', '--version',
+        dest='cv_version', default=None,
+        help='promote this version (major.minor) of the content view instead of the latest')
     args = parser.parse_args()
     return args
 
@@ -185,61 +189,67 @@ def run_promote(le_label, ks, args):
     if len(le_cvs) == 0:
         logging.error(f'no content view associed with LE "{le_label}"')
         sys.exit(8)
-    logging.info(f'there are {len(le_cvs)} content views associated with LE "{le_label}"')
+    elif len(le_cvs) > 1:
+        logging.error('multiple content views for one LE not implemented')
+        sys.exit(8)
 
-    nfail = 0
-    for le_cv in le_cvs:
-        cv_id = le_cv['id']
-        cv = ks.get(f'/content_views/{cv_id}')
-        if not cv:
-            logging.warning(f'  cannot find content view id {cv_id}')
-            nfail += 1
-            continue
-        cv_label = cv["label"]
-        cv_version = cv["latest_version"]
-        logging.info(f'associated content view id {cv_id} is "{cv_label}"')
-        logging.info(f'  latest version: {cv_version}')
-        logging.info(f'  last published: {cv["last_published"]}')
-
-        cvv_id = cv['latest_version_id']
-        cvv = ks.get(f'/content_view_versions/{cvv_id}')
-        if not cvv:
-            logging.warning(f'  cannot find content view version id {cvv_id}')
-            nfail += 1
-            continue
-        cvv_envs = cvv['environments']
-        cvv_env_ids = [ env['id'] for env in cvv_envs ]
-        if le_id in cvv_env_ids:
-            logging.warning(f'content view "{cv_label}" already promoted to this LE')
-            continue
-
-        payload = {
-            'environment_ids': [le_id],
-            'force': args.force,
-            }
-        logging.info(f'  promoting content view "{cv_label}" version {cv_version}...')
-        try:
-            output = ks.post(f'/content_view_versions/{cvv_id}/promote', payload)
-            if args.wait:
-                ks.wait_for_cvv(cvv_id, 'promotion')
-        except requests.exceptions.HTTPError as err:
-            resp = err.response
-            resp_obj = resp.json()
-            logging.error(f'status {resp.status_code}: {resp_obj["displayMessage"]}')
-            nfail += 1
-            continue
-
-    if nfail > 0:
+    le_cv = le_cvs[0]
+    cv_id = le_cv['id']
+    cv = ks.get(f'/content_views/{cv_id}')
+    if not cv:
+        logging.error(f'cannot find content view id {cv_id}')
         return 1
+    cv_label = cv["label"]
+    cv_version = cv["latest_version"]
+    logging.info(f'associated content view id {cv_id} is "{cv_label}"')
+    logging.info(f'  latest version: {cv_version}')
+    logging.info(f'  last published: {cv["last_published"]}')
+
+    if args.cv_version:
+        logging.info(f'  promoting version: {args.cv_version}')
+        cvv_id = None
+        for v in cv['versions']:
+            if v['version'] == args.cv_version:
+                cvv_id = v['id']
+                break
+        if not cvv_id:
+            logging.error('cannot find content view version {args.cv_version}')
+            return 1
     else:
+        cvv_id = cv['latest_version_id']
+    cvv = ks.get(f'/content_view_versions/{cvv_id}')
+    cv_version = cvv['version']
+    if not cvv:
+        logging.error(f'cannot find content view version id {cvv_id}')
+        return 1
+    cvv_envs = cvv['environments']
+    cvv_env_ids = [ env['id'] for env in cvv_envs ]
+    if le_id in cvv_env_ids:
+        logging.warning(f'content view "{cv_label}" version {cv_version} already promoted to this LE')
         return 0
+
+    payload = {
+        'environment_ids': [le_id],
+        'force': args.force,
+        }
+    logging.info(f'  promoting content view "{cv_label}" version {cv_version}...')
+    try:
+        output = ks.post(f'/content_view_versions/{cvv_id}/promote', payload)
+        if args.wait:
+            ks.wait_for_cvv(cvv_id, 'promotion')
+        return 0
+    except requests.exceptions.HTTPError as err:
+        resp = err.response
+        resp_obj = resp.json()
+        logging.error(f'status {resp.status_code}: {resp_obj["displayMessage"]}')
+        return 1
 
 
 def run_publish(cv_label, ks, args):
     cv = ks.get_content_view(cv_label)
     if not cv:
         logging.error(f'cannot find content view "{cv_label}"')
-        sys.exit(8)
+        return 1
     cv_id = cv['id']
     logging.info(f'found content view "{cv_label}" with id {cv_id}')
     logging.info(f'  latest version: {cv["latest_version"]}')
@@ -279,7 +289,7 @@ def run_publish(cv_label, ks, args):
         level = logging.WARNING if args.force else logging.ERROR
         logging.log(msg='not all repos are synced', level=level)
         if not args.force:
-            sys.exit(2)
+            return 1
 
     if dt_latest_sync <= dt_cv_last_published:
         logging.warning('content view already published after latest repo sync')
