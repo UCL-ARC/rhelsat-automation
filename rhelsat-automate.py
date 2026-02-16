@@ -122,22 +122,22 @@ class KatelloServer:
                 repos.append(fut.result())
         return repos
 
-    def wait_for_cvv(self, cvv_id, poll_interval=20, max_unexpected=3):
+    def wait_for_cvv(self, cvv_id, check_action, poll_interval=20, max_unexpected=3):
         nunexpected = 0
         while True:
             response = self.get(f'/content_view_versions/{cvv_id}')
             last_event = response['last_event']
             action = last_event['action']
-            if action != 'publish':
-                logging.error(f'last event action is "{action}", expected "publish"')
+            if action != check_action:
+                logging.error(f'last event action is "{action}", expected "{check_action}"')
                 sys.exit(2)
             status = last_event['status']
             if status == 'successful':
-                logging.info(f'publish completed')
+                logging.info(f'  {action} completed')
                 break
             elif status == 'in progress':
                 progress = last_event['task']['progress']
-                logging.info(f'publish progress {100*progress}%')
+                logging.info(f'  {action} progress {100*progress}%')
                 sleep(poll_interval)
             else:
                 nunexpected += 1
@@ -174,13 +174,6 @@ def parse_date(dtstr):
     return dt
 
 
-def day_of_year(dt):
-    year = dt.year
-    t0 = datetime(year, 1, 1)
-    doy = (dt-t0).days
-    return doy
-
-
 def run_promote(le_label, ks, args):
     le = ks.get_lifecycle_environment(le_label)
     if not le:
@@ -188,12 +181,58 @@ def run_promote(le_label, ks, args):
         sys.exit(8)
     le_id = le['id']
     logging.info(f'found lifecycle environment "{le_label}" with id {le_id}')
-    return le
-    #cvv_id = TODO
-    #payload = {
-    #    'environment_ids': [le_id],
-    #    }
-    #response = ks.post(f'/content_view_versions/{cvv_id}/promote', payload)
+    le_cvs = le['content_views']
+    if len(le_cvs) == 0:
+        logging.error(f'no content view associed with LE "{le_label}"')
+        sys.exit(8)
+    logging.info(f'there are {len(le_cvs)} content views associated with LE "{le_label}"')
+
+    nfail = 0
+    for le_cv in le_cvs:
+        cv_id = le_cv['id']
+        cv = ks.get(f'/content_views/{cv_id}')
+        if not cv:
+            logging.warning(f'  cannot find content view id {cv_id}')
+            nfail += 1
+            continue
+        cv_label = cv["label"]
+        cv_version = cv["latest_version"]
+        logging.info(f'associated content view id {cv_id} is "{cv_label}"')
+        logging.info(f'  latest version: {cv_version}')
+        logging.info(f'  last published: {cv["last_published"]}')
+
+        cvv_id = cv['latest_version_id']
+        cvv = ks.get(f'/content_view_versions/{cvv_id}')
+        if not cvv:
+            logging.warning(f'  cannot find content view version id {cvv_id}')
+            nfail += 1
+            continue
+        cvv_envs = cvv['environments']
+        cvv_env_ids = [ env['id'] for env in cvv_envs ]
+        if le_id in cvv_env_ids:
+            logging.warning(f'content view "{cv_label}" already promoted to this LE')
+            continue
+
+        payload = {
+            'environment_ids': [le_id],
+            'force': args.force,
+            }
+        logging.info(f'  promoting content view "{cv_label}" version {cv_version}...')
+        try:
+            output = ks.post(f'/content_view_versions/{cvv_id}/promote', payload)
+            if args.wait:
+                ks.wait_for_cvv(cvv_id, 'promotion')
+        except requests.exceptions.HTTPError as err:
+            resp = err.response
+            resp_obj = resp.json()
+            logging.error(f'status {resp.status_code}: {resp_obj["displayMessage"]}')
+            nfail += 1
+            continue
+
+    if nfail > 0:
+        return 1
+    else:
+        return 0
 
 
 def run_publish(cv_label, ks, args):
@@ -245,22 +284,34 @@ def run_publish(cv_label, ks, args):
     if dt_latest_sync <= dt_cv_last_published:
         logging.warning('content view already published after latest repo sync')
         if not args.force:
-            return None
+            return 0
     
     if args.cv_version:
         major, minor = map(int, args.cv_version.split('.'))
     else:
-        now = datetime.now()
-        major = now.year
-        minor = day_of_year(now)
+        cvv_id = cv['latest_version_id']
+        cvv = ks.get(f'/content_view_versions/{cvv_id}')
+        major = cvv['major']
+        minor = cvv['minor'] + 1
     payload = {
         'description': 'auto-publish',
         'major': major,
         'minor': minor,
         }
     logging.info(f'publishing content view version {major}.{minor}...')
-    response = ks.post(f'/content_views/{cv_id}/publish', payload)
-    return response
+    try:
+        output = ks.post(f'/content_views/{cv_id}/publish', payload)
+        if output:
+            cvv_id = output['input']['content_view_version_id']
+            logging.info(f'new content view version id = {cvv_id}')
+            if args.wait:
+                ks.wait_for_cvv(cvv_id, 'publish')
+        return 0
+    except requests.exceptions.HTTPError as err:
+        resp = err.response
+        resp_obj = resp.json()
+        logging.error(f'error {resp.status_code}: {resp_obj["displayMessage"]}')
+        return 1
 
 
 if __name__ == '__main__':
@@ -270,22 +321,20 @@ if __name__ == '__main__':
     ks  = KatelloServer(**cfg['satellite'])
 
     if not ks.set_org_id():
-        logging.error(f'cannot find organizaion "{ks.org}"')
+        logging.error(f'cannot find organization "{ks.org}"')
         sys.exit(8)
     logging.info(f'found organization "{ks.org}" with id {ks.org_id}')
 
-    response = None
+    rc = 0
     if args.command == 'publish':
         cv_label = args.content_view
-        response = run_publish(cv_label, ks, args)
-        if response:
-            cvv_id = response['input']['content_view_version_id']
-            logging.info(f'new content view version id = {cvv_id}')
-            if args.wait:
-                ks.wait_for_cvv(cvv_id)
+        rc = run_publish(cv_label, ks, args)
     elif args.command == 'promote':
         le_label = args.environment
-        response = run_promote(le_label, ks, args)
+        rc = run_promote(le_label, ks, args)
 
-    logging.info('all operations complete')
-
+    if rc == 0:
+        logging.info('operations completed successfully')
+    else:
+        logging.warning('operations completed with errors')
+    sys.exit(rc)
