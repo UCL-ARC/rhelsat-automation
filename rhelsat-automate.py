@@ -311,8 +311,9 @@ def run_publish(cv_label, ks, args):
         cvv = ks.get(f'/content_view_versions/{cvv_id}')
         major = cvv['major']
         minor = cvv['minor'] + 1
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     payload = {
-        'description': 'auto-publish',
+        'description': f'auto-publish {now}',
         'major': major,
         'minor': minor,
         }
