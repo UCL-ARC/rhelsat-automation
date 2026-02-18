@@ -293,8 +293,9 @@ def run_publish(cv_label, ks, args):
         dt_sync_ended = parse_date(sync_ended)
         if (dt_latest_sync is None) or (dt_sync_ended > dt_latest_sync):
             dt_latest_sync = dt_sync_ended
+    latest_sync_str = dt_latest_sync.strftime("%Y-%m-%d %H:%M:%S %Z") if dt_latest_sync else 'NEVER!?!'
     logging.info(f'  {nsyncsuccess} repos synced, {nnosyncplan} without sync plan')
-    logging.info(f'  latest repo sync: {dt_latest_sync.strftime("%Y-%m-%d %H:%M:%S %Z")}')
+    logging.info(f'  latest repo sync: {latest_sync_str}')
 
     if nsyncsuccess + nnosyncplan < nrepo:
         level = logging.WARNING if args.force else logging.ERROR
