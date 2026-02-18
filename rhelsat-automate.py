@@ -16,32 +16,35 @@ from typing import Union
 
 
 def process_args():
-    common = argparse.ArgumentParser(add_help=False)
-    common_group = common.add_argument_group("common options")
-    common_group.add_argument(
-        '-c', '--config',
-        default='config.ini',
-        help='path to config file (INI format)')
-    common_group.add_argument(
-        '-t', '--threads',
-        type=int, default=10,
-        help='number of concurrent requests (default: 10)')
-    common_group.add_argument(
-        '-f', '--force',
-        action='store_true',
-        help='force the operation')
-    common_group.add_argument(
-        '-w', '--wait',
-        action='store_true',
-        help='wait until the action is completed')
-    common_group.add_argument(
-        '--log-level',
-        default='INFO',
-        help='logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)')
+    def add_common(parser, use_defaults=True):
+        group = parser.add_argument_group("common options")
+        group.add_argument(
+            '-c', '--config',
+            default='config.ini' if use_defaults else argparse.SUPPRESS,
+            help='path to config file (INI format)')
+        group.add_argument(
+            '-t', '--threads',
+            type=int, default=10 if use_defaults else argparse.SUPPRESS,
+            help='number of concurrent requests (default: 10)')
+        group.add_argument(
+            '-f', '--force',
+            action='store_true',
+            default=False if use_defaults else argparse.SUPPRESS,
+            help='force the operation')
+        group.add_argument(
+            '-w', '--wait',
+            action='store_true',
+            default=False if use_defaults else argparse.SUPPRESS,
+            help='wait until the action is completed')
+        group.add_argument(
+            '--log-level',
+            default='INFO' if use_defaults else argparse.SUPPRESS,
+            help='logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)')
 
     parser = argparse.ArgumentParser(
-        description='Automate operations in RedHat Satellite.',
-        parents=[common])
+        description='Automate operations in RedHat Satellite.')
+    add_common(parser)
+
     subparsers = parser.add_subparsers(
         title='commands',
         dest='command',
@@ -50,9 +53,9 @@ def process_args():
 
     p_publish = subparsers.add_parser(
         'publish',
-        parents=[common],
         help='publish a content view',
         description='Publish a Content View.')
+    add_common(p_publish, use_defaults=False)
     p_publish.add_argument(
         'content_view',
         help='label of the content view')
@@ -63,9 +66,9 @@ def process_args():
 
     p_promote = subparsers.add_parser(
         'promote',
-        parents=[common],
         help='promote a content view to a lifecycle environment',
         description='Promote a content view to a lifecycle environment.')
+    add_common(p_promote, use_defaults=False)
     p_promote.add_argument(
         'environment',
         help='label of the lifecycle environment')
