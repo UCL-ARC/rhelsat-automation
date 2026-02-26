@@ -87,7 +87,7 @@ class KatelloServer:
     org: str
     username: str
     password: str
-    org_id: Union(int,None) = None
+    org_id: Union[int,None] = None
 
     def get(self, endpoint):
         cred = (self.username, self.password)
