@@ -236,7 +236,7 @@ def run_promote(le_label, ks, args):
     cvv_envs = cvv['environments']
     cvv_env_ids = [ env['id'] for env in cvv_envs ]
     if le_id in cvv_env_ids:
-        logging.warning(f'content view "{cv_label}" version {cv_version} already promoted to this LE')
+        logging.info(f'content view "{cv_label}" version {cv_version} already promoted to this LE')
         return 0
 
     payload = {
@@ -304,7 +304,7 @@ def run_publish(cv_label, ks, args):
             return 1
 
     if dt_latest_sync <= dt_cv_last_published:
-        logging.warning('content view already published after latest repo sync')
+        logging.info('content view already published after latest repo sync')
         if not args.force:
             return 0
     
