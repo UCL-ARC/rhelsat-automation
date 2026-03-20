@@ -76,6 +76,10 @@ cd "${scriptdir}"
 . venv/bin/activate \
 || error "failed to activate Python venv"
 
+maxrc=0
 while read -a tasks; do
    run_tasks "${tasks[@]}" </dev/null
+   rc=$?
+   [[ $rc -gt $maxrc ]] && maxrc=$rc
 done < "${jobsconf}"
+exit $maxrc
