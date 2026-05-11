@@ -15,7 +15,7 @@ ntry=3
 delay=300
 
 # logging level for the Python script
-loglevel='WARNING'
+loglevel="${LOGLEVEL-WARNING}"
 
 
 function error () {

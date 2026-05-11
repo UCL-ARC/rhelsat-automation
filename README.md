@@ -112,3 +112,10 @@ Their order should respect the corresponding lifecycle environments path.
 Realizing that the Satellite server may occasionally have problems, the script supports
 retrying each task a number of times. This is currently hard-coded in the script
 (3 attempts, 5 minutes delay). Adjust as needed.
+
+By default the `jobs.sh` script runs the tasks at loglevel `WARNING`, which should be
+silent if everything goes alright. To see more information and progress messages, set
+the environment variable `LOGLEVEL` e.g. to `INFO`, like so:
+```
+LOGLEVEL=INFO ./jobs.sh
+```
