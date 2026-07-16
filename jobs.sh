@@ -47,7 +47,7 @@ function retry () {
 
 function run_tasks () {
    # first task is the content view
-   retry ./rhelsat-automate.py publish --log-level "${loglevel}" --wait "$1"
+   retry ./rhelsat-automate.py publish --log-level "${loglevel}" --wait --force "$1"
    if [[ $? -ne 0 ]]; then
       warn "failed to publish content view '$1', skipping dependent tasks"
       return 1
